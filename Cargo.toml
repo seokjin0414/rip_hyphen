@@ -1,0 +1,18 @@
+[package]
+name = "seppuku_hyphen"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true
+debug = false
+incremental = false
+strip = true
+panic = "abort"
+
+[dependencies]
+tokio = { version = "1.37.0", features = ["full"] }
+fantoccini = "0.19.3"
+reqwest = { version = "0.12.4", features = ["json"] }
