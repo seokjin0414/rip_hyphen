@@ -2,14 +2,22 @@ use fantoccini::{Client, Locator};
 use tokio;
 use std::process::Command;
 use std::error::Error;
+use dotenv::dotenv;
+use std::env;
+use std::sync::Arc;
+use dashmap::DashMap;
+use tokio::time::{timeout, Duration};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let url = "http://localhost:4444";
+    let mut attempts = 0;
+    let max_attempts = 10;
 
-    let mut user_id: String = "".to_string();
-    let mut user_pw: String = "".to_string();
-    let mut user_number: String = "".to_string();
+    dotenv().ok();
+    let user_id = env::var("USER_ID").expect("");
+    let user_pw = env::var("USER_PW").expect("");
+    let user_number = env::var("USER_NUMBER").expect("");
 
     // ChromeDriver 실행 경로 (Homebrew로 설치된 경로)
     let chromedriver_path = "/opt/homebrew/bin/chromedriver"; // 또는 설치된 ChromeDriver의 경로
@@ -33,6 +41,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     };
+
+    // 브라우저 창 크기 설정
+    client.set_window_rect(0, 0, 774, 857).await?;
 
     // 페이지 이동
     if let Err(e) = client.goto("https://online.kepco.co.kr").await {
@@ -61,7 +72,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         eprintln!("Failed to find the menu button:");
     }
-
 
     // login form 로드 대기
     if let Err(e) = client.wait_for_find(Locator::Id("mf_wfm_header_gnb_mobileGoLogin")).await {
@@ -132,11 +142,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err(Box::new(e) as Box<dyn Error>);
     }
 
-    // 3초 동안 대기(로딩...)
-    println!("Waiting for 3 SEC...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    let cost_view_clicked = loop {
+        if attempts >= max_attempts {
+            break false; // 최대 시도 횟수에 도달하면 루프 종료
+        }
+        match client.find(Locator::Id("mf_wfm_layout_wq_uuid_884")).await {
+            Ok(element) => {
+                match element.click().await {
+                    Ok(_) => {
+                        println!("Cost view clicked successfully");
+                        break true; // 성공적으로 클릭하면 루프 종료
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to click the cost_view button (attempt {}): {}", attempts + 1, e);
+                        // 클릭 실패 시 잠시 대기 후 다시 시도
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        attempts += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Retrying to find the cost_view element (attempt {}): {}", attempts + 1, e);
+                // 요소를 찾지 못하면 잠시 대기 후 다시 시도
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                attempts += 1;
+            }
+        }
+    };
 
-    // 요금 조회 버튼 클릭
+    /*// 요금 조회 버튼 클릭
     if let Ok(element) = client.find(Locator::Id("mf_wfm_layout_wq_uuid_884")).await {
         if let Err(e) = element.click().await {
             eprintln!("Failed to click the cost_view button: {}", e);
@@ -145,49 +179,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     } else {
         eprintln!("Failed to find the cost_view element");
-    }
-
-    /*// menu button 로드 대기
-    if let Err(e) = client.wait_for_find(Locator::Id("mf_wfm_header_gnb_btnSiteMap")).await {
-        eprintln!("Failed to find the menu button: {}", e);
-        client.close().await?;
-        chromedriver_process.kill().expect("failed to kill ChromeDriver");
-        return Err(Box::new(e) as Box<dyn Error>);
-    }
-
-    // 3초 동안 대기(로딩...)
-    println!("Waiting for 5 SEC...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-
-    // mf_wfm_header_gnb_mobileGoLogin
-    // menu button 클릭
-    if let Ok(element) = client.find(Locator::Id("mf_wfm_header_gnb_btnSiteMap")).await {
-        if let Err(e) = element.click().await {
-            eprintln!("Failed to click the menu button: {}", e);
-        } else {
-            println!("menu button clicked successfully");
-        }
-    } else {
-        eprintln!("Failed to find the menu button:");
-    }
-
-    // cost_view 로드 대기
-    if let Err(e) = client.wait_for_find(Locator::Id("mf_wfm_header_gnb_btn_selectFee")).await {
-        eprintln!("Failed to find the cost_view: {}", e);
-        client.close().await?;
-        chromedriver_process.kill().expect("failed to kill ChromeDriver");
-        return Err(Box::new(e) as Box<dyn Error>);
-    }
-
-    // cost_view 클릭
-    if let Ok(element) = client.find(Locator::Id("mf_wfm_header_gnb_btn_selectFee")).await {
-        if let Err(e) = element.click().await {
-            eprintln!("Failed to click the cost_view: {}", e);
-        } else {
-            println!("cost_view clicked successfully");
-        }
-    } else {
-        eprintln!("Failed to find the cost_view:");
     }*/
 
     // 필드 로드 대기
@@ -198,9 +189,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err(Box::new(e) as Box<dyn Error>);
     }
 
-    // 3초 동안 대기(로딩...)
-    println!("Waiting for 3 SEC...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    // 1초 동안 대기(로딩...)
+    println!("Waiting for 1 SEC...");
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+    // 로딩 확인
+    let element_hidden = timeout(Duration::from_secs(20), async {
+        loop {
+            match client.find(Locator::Id("mf_wq_uuid_1_wq_processMsgComp")).await {
+                Ok(element) => {
+                    match element.attr("aria-hidden").await {
+                        Ok(Some(value)) if value == "true" => {
+                            println!("Element is hidden (aria-hidden=\"true\")");
+                            break;
+                        }
+                        Ok(_) => {
+                            eprintln!("Element is not hidden yet, retrying...");
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to get aria-hidden attribute: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Retrying to find the element: {}", e);
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }).await;
+
 
     // 사용자 번호 입력
     if let Ok(element) = client.find(Locator::Id("mf_wfm_layout_inp_searchCustNo")).await {
@@ -233,9 +251,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err(Box::new(e) as Box<dyn Error>);
     }
 
-    // 1초 동안 대기(로딩...)
-    println!("Waiting for 3 SEC...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    // 1초 동안 대기
+    println!("Waiting for 1 SEC...");
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+    // 창에서 스크롤을 강제로 맨 아래로 내리기
+    client.execute("window.scrollTo(0, document.body.scrollHeight);", vec![]).await?;
 
     // 상세 요금 버튼 클릭
     if let Ok(element) = client.find(Locator::Id("mf_wfm_layout_ui_generator_0_btn_moveDetail")).await {
@@ -247,7 +268,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         eprintln!("Failed to find the move_detail");
     }
-
 
     // '1년' 옵션이 선택될 때까지 대기
     println!("Waiting for '1년' option to be selected...");
@@ -273,13 +293,68 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    if option_selected {
-        println!("'1년' option is selected successfully");
-    } else {
-        eprintln!("Failed to select '1년' option");
+    // 로딩 대기
+    let element_hidden = timeout(Duration::from_secs(20), async {
+        loop {
+            match client.find(Locator::Id("mf_wq_uuid_1_wq_processMsgComp")).await {
+                Ok(element) => {
+                    match element.attr("aria-hidden").await {
+                        Ok(Some(value)) if value == "true" => {
+                            println!("Element is hidden (aria-hidden=\"true\")");
+                            break;
+                        }
+                        Ok(_) => {
+                            eprintln!("Element is not hidden yet, retrying...");
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to get aria-hidden attribute: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Retrying to find the element: {}", e);
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }).await;
+
+    // JavaScript를 사용하여 특정 요소의 자식 요소들의 ID를 가져오기
+    let result = client.execute(
+        r#"
+        let children = document.getElementById('mf_wfm_layout_ui_generator').children;
+        let ids = [];
+        for (let i = 0; i < children.length; i++) {
+            ids.push(children[i].id);
+        }
+        return ids;
+        "#,
+        vec![]
+    ).await?;
+
+    // 결과를 벡터로 변환
+    let ids: Vec<String> = result.as_array()
+        .expect("Expected an array")
+        .iter()
+        .map(|v| v.as_str().expect("Expected a string").to_string())
+        .collect();
+
+    // DashMap에 ID들을 저장
+    let map = Arc::new(DashMap::new());
+    for id in ids {
+        map.insert(id.clone(), ());
+    }
+
+    // DashMap의 내용을 출력
+    for id in map.iter() {
+        println!("ID: {}", id.key());
     }
 
 
+    // 결과를 정수로 변환
+    let div_count = result.as_i64().unwrap_or(0);
+
+    println!("Number of child divs: {}", div_count);
 
 
 

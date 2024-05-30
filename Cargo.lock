@@ -52,6 +52,12 @@ checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -98,6 +104,16 @@ version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e859cd57d0710d9e06c381b550c06e76992472a8c6d527aecd2fc673dcc231fb"
 dependencies = [
+ "time",
+ "version_check",
+]
+
+[[package]]
+name = "cookie"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7efb37c3e1ccb1ff97164ad95ac1606e8ccd35b3fa0a7d99a304c7f4a428cc24"
+dependencies = [
  "percent-encoding",
  "time",
  "version_check",
@@ -120,6 +136,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06ea2b9bc92be3c2baa9334a323ebca2d6f074ff852cd1d7b11064035cd3868f"
 
 [[package]]
+name = "dashmap"
+version = "5.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
+dependencies = [
+ "cfg-if",
+ "hashbrown",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
 name = "deranged"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -127,6 +156,12 @@ checksum = "b42b6fa04a440b495c8b04d0e71b707c585f83cb9cb28cf8cd0d976c315e31b4"
 dependencies = [
  "powerfmt",
 ]
+
+[[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "encoding_rs"
@@ -155,18 +190,19 @@ dependencies = [
 
 [[package]]
 name = "fantoccini"
-version = "0.19.3"
+version = "0.20.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65f0fbe245d714b596ba5802b46f937f5ce68dcae0f32f9a70b5c3b04d3c6f64"
+checksum = "82c10021ec6c124c2947859e9ba50c390e6bfb5e546e362d8d26b5cb94759196"
 dependencies = [
- "base64 0.13.1",
- "cookie",
+ "base64 0.21.7",
+ "cookie 0.17.0",
  "futures-core",
  "futures-util",
  "http 0.2.12",
  "hyper 0.14.28",
  "hyper-tls 0.5.0",
  "mime",
+ "openssl",
  "serde",
  "serde_json",
  "time",
@@ -878,6 +914,8 @@ dependencies = [
 name = "seppuku_hyphen"
 version = "0.1.0"
 dependencies = [
+ "dashmap",
+ "dotenv",
  "fantoccini",
  "reqwest",
  "tokio",
@@ -1304,13 +1342,13 @@ dependencies = [
 
 [[package]]
 name = "webdriver"
-version = "0.46.0"
+version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9973cb72c8587d5ad5efdb91e663d36177dc37725e6c90ca86c626b0cc45c93f"
+checksum = "cf9ae70f0cb12332fe144def990a9e62b20db2361b8784f879bb2814aad6c763"
 dependencies = [
  "base64 0.13.1",
  "bytes",
- "cookie",
+ "cookie 0.16.2",
  "http 0.2.12",
  "log",
  "serde",
