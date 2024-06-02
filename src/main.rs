@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use dotenv::dotenv;
-use fantoccini::{elements::Element, Client, Locator};
+use fantoccini::{elements::Element, Client, ClientBuilder, Locator};
 use std::{
     env,
-    error::Error,
     process::{Child, Command},
     sync::Arc,
 };
@@ -172,7 +171,7 @@ async fn main() -> Result<()> {
 
     // WebDriver 서버에 연결
     let client = loop {
-        match Client::new(url).await {
+        match ClientBuilder::native().connect(url).await {
             Ok(client) => break client,
             Err(e) => {
                 eprintln!("Retrying to connect to WebDriver: {}", e);
