@@ -1,13 +1,28 @@
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 use dashmap::DashMap;
 use dotenv::dotenv;
 use fantoccini::{elements::Element, Client, ClientBuilder, Locator};
+use regex::Regex;
 use std::{
     env,
     process::{Child, Command},
     sync::Arc,
 };
 use tokio::time::{timeout, Duration};
+
+#[derive(Debug)]
+struct KepcoDate {
+    claim_date: Option<NaiveDate>,
+    start_date: Option<NaiveDate>,
+    end_date: Option<NaiveDate>,
+    usage: f64,
+    amount: i64,
+    payment: i64,
+    unpaid: i64,
+    payment_method: Option<String>,
+    payment_date: Option<NaiveDate>,
+}
 
 // 요소 대기
 async fn wait_for_element(
@@ -189,6 +204,147 @@ async fn get_children_ids_to_map(
     Ok(map)
 }
 
+// parsing 청구 기간
+fn parse_date(date_str: &str) -> Result<NaiveDate> {
+    let date_with_day = if date_str.len() == 7 {
+        format!("{}.01", date_str) // 일자를 1로 설정
+    } else {
+        date_str.to_string()
+    };
+    NaiveDate::parse_from_str(&date_with_day, "%Y.%m.%d").context("Failed to parse date")
+}
+
+// parsing 대상 기간
+fn parse_date_range(date_range: &str) -> Result<(Option<NaiveDate>, Option<NaiveDate>)> {
+    let dates: Vec<&str> = date_range.split('-').collect();
+    let start_date = parse_date(dates[0]).ok();
+    let end_date = parse_date(dates[1]).ok();
+    Ok((start_date, end_date))
+}
+
+// parsing 사용량
+fn parse_use_kwh(kwh_str: &str) -> Result<f64> {
+    let cleaned_str = kwh_str.replace(",", "").replace("kWh", "");
+    cleaned_str
+        .parse::<f64>()
+        .context("Failed to parse use kWh")
+}
+
+// parsing 요금
+fn parse_amount(amount_str: &str) -> Result<i64> {
+    let amount = amount_str
+        .split('(')
+        .next()
+        .unwrap_or(amount_str)
+        .replace("원", "")
+        .replace(",", "");
+    amount.parse::<i64>().context("Failed to parse amount")
+}
+
+// parsing 지불방법, 기간
+fn parse_payment_method(payment_str: &str) -> Result<(Option<String>, Option<NaiveDate>)> {
+    let parts: Vec<&str> = payment_str.split('/').collect();
+    let method = if !parts[0].is_empty() {
+        Some(parts[0].to_string())
+    } else {
+        None
+    };
+    let date = if parts.len() > 1 {
+        Some(parse_date(parts[1])?)
+    } else {
+        None
+    };
+    Ok((method, date))
+}
+
+// get_and_parsing_data
+async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
+    async fn get_text_by_xpath(client: &Client, xpath: &str) -> Option<String> {
+        match client.find(Locator::XPath(xpath)).await.ok() {
+            Some(element) => element.text().await.ok(),
+            None => None,
+        }
+    }
+
+    let claim_date_row = get_text_by_xpath(
+        client,
+        &format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payYm')]",
+            parent_id
+        ),
+    )
+    .await;
+    let date_range = get_text_by_xpath(
+        client,
+        &format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_gigan')]",
+            parent_id
+        ),
+    )
+    .await;
+    let usage_row = get_text_by_xpath(
+        client,
+        &format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_useKwh')]",
+            parent_id
+        ),
+    )
+    .await;
+    let amount_row = get_text_by_xpath(
+        client,
+        &format!("//*[@id='{}']//span[contains(@id, '_txt_pay')]", parent_id),
+    )
+    .await;
+    let payment_row = get_text_by_xpath(
+        client,
+        &format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payAmt')]",
+            parent_id
+        ),
+    )
+    .await;
+    let unpaid_row = get_text_by_xpath(
+        client,
+        &format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payAmt')]",
+            parent_id
+        ),
+    )
+    .await;
+    let payment_option = get_text_by_xpath(
+        client,
+        &format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payGubnNDay')]",
+            parent_id
+        ),
+    )
+    .await;
+
+    let claim_date = claim_date_row.map(|date| parse_date(&date)).transpose()?;
+    let (start_date, end_date) = date_range
+        .map(|range| parse_date_range(&range))
+        .transpose()?
+        .unwrap_or((None, None));
+    let usage = usage_row.map_or(Ok(0.0), |kwh| parse_use_kwh(&kwh))?;
+    let amount = amount_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
+    let payment = payment_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
+    let unpaid = unpaid_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
+    let (payment_method, payment_date) =
+        payment_option.map_or(Ok((None, None)), |s| parse_payment_method(&s))?;
+
+    Ok(KepcoDate {
+        claim_date,
+        start_date,
+        end_date,
+        usage,
+        amount,
+        payment,
+        unpaid,
+        payment_method,
+        payment_date,
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
@@ -354,6 +510,10 @@ async fn main() -> Result<()> {
     for id in map.iter() {
         println!("ID: {}", id.key());
     }
+
+
+
+
 
 
     // 2분 동안 대기
