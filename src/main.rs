@@ -211,14 +211,17 @@ fn parse_date(date_str: &str) -> Result<NaiveDate> {
     } else {
         date_str.to_string()
     };
+
     NaiveDate::parse_from_str(&date_with_day, "%Y.%m.%d").context("Failed to parse date")
 }
 
 // parsing 대상 기간
 fn parse_date_range(date_range: &str) -> Result<(Option<NaiveDate>, Option<NaiveDate>)> {
     let dates: Vec<&str> = date_range.split('-').collect();
+
     let start_date = parse_date(dates[0]).ok();
     let end_date = parse_date(dates[1]).ok();
+
     Ok((start_date, end_date))
 }
 
@@ -232,23 +235,22 @@ fn parse_use_kwh(kwh_str: &str) -> Result<f64> {
 
 // parsing 요금
 fn parse_amount(amount_str: &str) -> Result<i64> {
-    let amount = amount_str
-        .split('(')
-        .next()
-        .unwrap_or(amount_str)
-        .replace("원", "")
-        .replace(",", "");
+    let amount_part = amount_str.split('원').next().unwrap_or(amount_str);
+
+    let amount = amount_part.replace(",", "");
     amount.parse::<i64>().context("Failed to parse amount")
 }
 
-// parsing 지불방법, 기간
+// parsing 지불 방법, 기간
 fn parse_payment_method(payment_str: &str) -> Result<(Option<String>, Option<NaiveDate>)> {
     let parts: Vec<&str> = payment_str.split('/').collect();
+
     let method = if !parts[0].is_empty() {
         Some(parts[0].to_string())
     } else {
         None
     };
+
     let date = if parts.len() > 1 {
         Some(parse_date(parts[1])?)
     } else {
@@ -257,80 +259,75 @@ fn parse_payment_method(payment_str: &str) -> Result<(Option<String>, Option<Nai
     Ok((method, date))
 }
 
+// get text from locator
+async fn get_text_by_locator(client: &Client, locator: Locator<'_>) -> Option<String> {
+    match client.find(locator).await.ok() {
+        Some(element) => element.text().await.ok(),
+        None => None,
+    }
+}
+
+// get text from xpath
+// async fn get_text_by_xpath(client: &Client, xpath: &str) -> Option<String> {
+//     match client.find(Locator::XPath(xpath)).await.ok() {
+//         Some(element) => element.text().await.ok(),
+//         None => None,
+//     }
+// }
+
 // get_and_parsing_data
 async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
-    async fn get_text_by_xpath(client: &Client, xpath: &str) -> Option<String> {
-        match client.find(Locator::XPath(xpath)).await.ok() {
-            Some(element) => element.text().await.ok(),
-            None => None,
-        }
-    }
+    let claim_date_row = get_text_by_locator(
+        client,
+        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_payYm')]", parent_id)),
+    )
+    .await;
 
-    let claim_date_row = get_text_by_xpath(
+    let date_range_row = get_text_by_locator(
         client,
-        &format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_payYm')]",
-            parent_id
-        ),
+        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_gigan')]", parent_id)),
     )
     .await;
-    let date_range = get_text_by_xpath(
+
+    let usage_row = get_text_by_locator(
         client,
-        &format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_gigan')]",
-            parent_id
-        ),
+        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_useKwh')]", parent_id)),
     )
     .await;
-    let usage_row = get_text_by_xpath(
+
+    let amount_row = get_text_by_locator(
         client,
-        &format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_useKwh')]",
-            parent_id
-        ),
+        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_monthPay')]", parent_id)),
     )
     .await;
-    let amount_row = get_text_by_xpath(
-        client,
-        &format!("//*[@id='{}']//span[contains(@id, '_txt_pay')]", parent_id),
+
+    let payment_row = get_text_by_locator(
+        client, Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_pay')]", parent_id)),
     )
     .await;
-    let payment_row = get_text_by_xpath(
+
+    let unpaid_row = get_text_by_locator(
         client,
-        &format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_payAmt')]",
-            parent_id
-        ),
+        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_payAmt')]", parent_id)),
     )
     .await;
-    let unpaid_row = get_text_by_xpath(
-        client,
-        &format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_payAmt')]",
-            parent_id
-        ),
-    )
-    .await;
-    let payment_option = get_text_by_xpath(
-        client,
-        &format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_payGubnNDay')]",
-            parent_id
-        ),
+
+    let payment_option_row = get_text_by_locator(
+        client, Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_payGubnNDay')]", parent_id)),
     )
     .await;
 
     let claim_date = claim_date_row.map(|date| parse_date(&date)).transpose()?;
-    let (start_date, end_date) = date_range
+    let (start_date, end_date) = date_range_row
         .map(|range| parse_date_range(&range))
         .transpose()?
         .unwrap_or((None, None));
     let usage = usage_row.map_or(Ok(0.0), |kwh| parse_use_kwh(&kwh))?;
     let amount = amount_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
-    let payment = payment_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
-    let unpaid = unpaid_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
+    let payment = payment_row.map_or(Ok(0), |payment| parse_amount(&payment))?;
+    let unpaid = unpaid_row.map_or(Ok(0), |unpaid| parse_amount(&unpaid))?;
     let (payment_method, payment_date) =
-        payment_option.map_or(Ok((None, None)), |s| parse_payment_method(&s))?;
+        payment_option_row.map_or(Ok((None, None)), |s| parse_payment_method(&s))?;
 
     Ok(KepcoDate {
         claim_date,
@@ -510,11 +507,6 @@ async fn main() -> Result<()> {
     for id in map.iter() {
         println!("ID: {}", id.key());
     }
-
-
-
-
-
 
     // 2분 동안 대기
     println!("Waiting for 2 minutes...");
