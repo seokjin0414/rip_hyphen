@@ -148,6 +148,47 @@ async fn click_element_with_retries(
     }
 }
 
+// 자식 요소들의 ID -> DashMap
+async fn get_children_ids_to_map(
+    client: &Client,
+    parent_id: &str,
+) -> Result<Arc<DashMap<String, ()>>> {
+    let script = format!(
+        r#"
+        let children = document.getElementById('{}').children;
+        let ids = [];
+        for (let i = 0; i < children.length; i++) {{
+            ids.push(children[i].id);
+        }}
+        return ids;
+        "#,
+        parent_id
+    );
+
+    let result = client
+        .execute(&script, vec![])
+        .await
+        .context("Failed to execute script to get children IDs")?;
+
+    let ids: Vec<String> = result
+        .as_array()
+        .context("Expected an array from the script result")?
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .context("Expected a string in the array")
+                .map(|s| s.to_string())
+        })
+        .collect::<Result<Vec<String>>>()?;
+
+    let map = Arc::new(DashMap::new());
+    for id in ids {
+        map.insert(id, ());
+    }
+
+    Ok(map)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
@@ -306,40 +347,14 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-
-    // 자식 요소들의 ID를 가져오기
-    let result = client
-        .execute(
-    r#"
-        let children = document.getElementById('mf_wfm_layout_ui_generator').children;
-        let ids = [];
-        for (let i = 0; i < children.length; i++) {
-            ids.push(children[i].id);
-        }
-        return ids;
-        "#,
-            vec![],
-        )
-        .await?;
-
-    // 결과를 벡터로 변환
-    let ids: Vec<String> = result
-        .as_array()
-        .expect("Expected an array")
-        .iter()
-        .map(|v| v.as_str().expect("Expected a string").to_string())
-        .collect();
-
-    // DashMap에 ID들을 저장
-    let map = Arc::new(DashMap::new());
-    for id in ids {
-        map.insert(id.clone(), ());
-    }
+    // 자식 요소들의 ID를 가져와서 DashMap에 저장
+    let map = get_children_ids_to_map(&client, "mf_wfm_layout_ui_generator").await?;
 
     // DashMap의 내용을 출력
     for id in map.iter() {
         println!("ID: {}", id.key());
     }
+
 
     // 2분 동안 대기
     println!("Waiting for 2 minutes...");
