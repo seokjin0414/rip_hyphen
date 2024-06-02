@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
         .expect("failed to start ChromeDriver");
 
     // ChromeDriver 완전 시작 대기
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     // WebDriver 서버에 연결
     let client = loop {
@@ -175,7 +175,7 @@ async fn main() -> Result<()> {
             Ok(client) => break client,
             Err(e) => {
                 eprintln!("Retrying to connect to WebDriver: {}", e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     };
@@ -306,10 +306,11 @@ async fn main() -> Result<()> {
     )
     .await?;
 
+
     // 자식 요소들의 ID를 가져오기
     let result = client
         .execute(
-            r#"
+    r#"
         let children = document.getElementById('mf_wfm_layout_ui_generator').children;
         let ids = [];
         for (let i = 0; i < children.length; i++) {
