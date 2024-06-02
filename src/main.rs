@@ -117,8 +117,8 @@ async fn click_element_with_retries(client: &Client, locator: Locator<'_>, max_a
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
+
     let url = "http://localhost:4444";
-    let max_attempts = 10;
     let user_id = env::var("USER_ID").expect("");
     let user_pw = env::var("USER_PW").expect("");
     let user_number = env::var("USER_NUMBER").expect("");
@@ -177,40 +177,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 로그인 버튼 클릭
     click_element(&client, Locator::Id("mf_wfm_header_gnb_login_popup_wframe_btn_login")).await?;
 
-   // /html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]
+    // /html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]
     // 요금 조회 버튼 로드 대기
     wait_for_element(&client, Locator::XPath("/html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]"), &mut chromedriver_process).await?;
 
-
-
-    let cost_view_clicked = loop {
-        if attempts >= max_attempts {
-            break false; // 최대 시도 횟수에 도달하면 루프 종료
-        }
-        match client.find(Locator::XPath("/html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]")).await {
-            Ok(element) => {
-                match element.click().await {
-                    Ok(_) => {
-                        println!("Cost view clicked successfully");
-                        break true; // 성공적으로 클릭하면 루프 종료
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to click the cost_view button (attempt {}): {}", attempts + 1, e);
-                        // 클릭 실패 시 잠시 대기 후 다시 시도
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                        attempts += 1;
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Retrying to find the cost_view element (attempt {}): {}", attempts + 1, e);
-                // 요소를 찾지 못하면 잠시 대기 후 다시 시도
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                attempts += 1;
-            }
-        }
-    };
-
+    // 요금 조회 버튼 클릭 반복 시도
+    let cost_view_clicked = click_element_with_retries(
+        &client,
+        Locator::XPath("/html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]"),
+        10
+    ).await?;
 
     // 필드 로드 대기
     wait_for_element(&client, Locator::Id("mf_wfm_layout_inp_searchCustNo"), &mut chromedriver_process).await?;
@@ -263,6 +239,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     wait_for_element_hidden(&client, Locator::Id("mf_wq_uuid_1_wq_processMsgComp"), Duration::from_secs(20)).await?;
 
 
+
     // 자식 요소들의 ID를 가져오기
     let result = client.execute(
         r#"
@@ -295,17 +272,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
 
-    // 결과를 정수로 변환
-    let div_count = result.as_i64().unwrap_or(0);
-
-    println!("Number of child divs: {}", div_count);
-
-
 
     // 2분 동안 대기
     println!("Waiting for 2 minutes...");
     tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
-
 
     // 브라우저 닫기
     if let Err(e) = client.close().await {
