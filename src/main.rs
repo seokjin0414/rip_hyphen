@@ -19,7 +19,7 @@ struct KepcoData {
     end_date: Option<NaiveDate>,
     usage: f64,
     amount: i64,
-    payment: i64,
+    paid: i64,
     unpaid: i64,
     payment_method: Option<String>,
     payment_date: Option<NaiveDate>,
@@ -273,7 +273,11 @@ async fn get_text_by_locator(client: &Client, locator: Locator<'_>) -> Option<St
 }
 
 // get text from locator art index
-async fn get_text_by_locator_at_index(client: &Client, locator: Locator<'_>, index: usize) -> Option<String> {
+async fn get_text_by_locator_at_index(
+    client: &Client,
+    locator: Locator<'_>,
+    index: usize,
+) -> Option<String> {
     match client.find_all(locator).await.ok() {
         Some(elements) => {
             if let Some(element) = elements.get(index) {
@@ -323,7 +327,7 @@ async fn extract_data_year(client: &Client, parent_id: &str) -> Result<KepcoData
     )
     .await;
 
-    let payment_row = get_text_by_locator_at_index(
+    let paid_row = get_text_by_locator_at_index(
         client,
         Locator::XPath(&format!(
             "//*[@id='{}']//span[contains(@id, '_txt_pay')]",
@@ -358,7 +362,7 @@ async fn extract_data_year(client: &Client, parent_id: &str) -> Result<KepcoData
         .unwrap_or((None, None));
     let usage = usage_row.map_or(Ok(0.0), |kwh| parse_use_kwh(&kwh))?;
     let amount = amount_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
-    let payment = payment_row.map_or(Ok(0), |payment| parse_amount(&payment))?;
+    let paid = paid_row.map_or(Ok(0), |paid| parse_amount(&paid))?;
     let unpaid = unpaid_row.map_or(Ok(0), |unpaid| parse_amount(&unpaid))?;
     let (payment_method, payment_date) =
         payment_option_row.map_or(Ok((None, None)), |s| parse_payment_method(&s))?;
@@ -369,7 +373,7 @@ async fn extract_data_year(client: &Client, parent_id: &str) -> Result<KepcoData
         end_date,
         usage,
         amount,
-        payment,
+        paid,
         unpaid,
         payment_method,
         payment_date,
@@ -405,7 +409,11 @@ async fn parse_data_from_parent_ids(
 }
 
 // select 요소에서 옵션 인덱스 찾기
-async fn get_option_index(client: &Client, select_locator: Locator<'_>, text: &str) -> Result<usize> {
+async fn get_option_index(
+    client: &Client,
+    select_locator: Locator<'_>,
+    text: &str,
+) -> Result<usize> {
     let element = client
         .find(select_locator)
         .await
@@ -442,7 +450,10 @@ async fn process_options(
     // option_index to last index data parsing
     for i in *option_index..options.len() {
         // 옵션 선택
-        options[i].click().await.context("Failed to select option")?;
+        options[i]
+            .click()
+            .await
+            .context("Failed to select option")?;
 
         // 로딩 대기
         wait_for_element_hidden(
@@ -451,12 +462,16 @@ async fn process_options(
             chromedriver_process,
             Duration::from_secs(20),
         )
-            .await?;
+        .await?;
 
         // 고객 번호 입력
-        enter_value_in_element(&client, Locator::Id("mf_wfm_layout_inp_searchCustNo"), &user_number)
-            .await
-            .context("Failed to enter customer number")?;
+        enter_value_in_element(
+            &client,
+            Locator::Id("mf_wfm_layout_inp_searchCustNo"),
+            &user_number,
+        )
+        .await
+        .context("Failed to enter customer number")?;
 
         // 검색 버튼 클릭
         click_element(&client, Locator::Id("mf_wfm_layout_btn_search")).await?;
@@ -467,9 +482,7 @@ async fn process_options(
             Locator::Id("mf_wfm_layout_ui_generator"),
             chromedriver_process,
         )
-            .await?;
-
-
+        .await?;
     }
 
     Ok(())
@@ -646,7 +659,7 @@ async fn main() -> Result<()> {
     let mut data_vec = parse_data_from_parent_ids(&client_arc, map).await?;
     data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
 
-    let reference_date = data_vec[data_vec.len() -1]
+    let reference_date = data_vec[data_vec.len() - 1]
         .claim_date
         .map(|date| format!("{}년 {:02}월", date.year(), date.month()))
         .unwrap_or_else(|| "N/A".to_string());
@@ -660,7 +673,7 @@ async fn main() -> Result<()> {
         Locator::Id("mf_wfm_layout_slb_searchYm_input_0"),
         &mut chromedriver_process,
     )
-        .await?;
+    .await?;
 
     // 로딩 대기
     wait_for_element_hidden(
@@ -669,7 +682,7 @@ async fn main() -> Result<()> {
         &mut chromedriver_process,
         Duration::from_secs(20),
     )
-        .await?;
+    .await?;
 
     // select 에서 reference_date 옵션의 인덱스 search
     let select_locator = Locator::Id("mf_wfm_layout_slb_searchYm_input_0");
@@ -677,9 +690,15 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to find option index")?;
 
-    process_options(client_arc, select_locator, &user_number, &option_index, &mut chromedriver_process)
-        .await
-        .context("Failed to process options")?;
+    process_options(
+        client_arc,
+        select_locator,
+        &user_number,
+        &option_index,
+        &mut chromedriver_process,
+    )
+    .await
+    .context("Failed to process options")?;
 
     // JSON으로 변환
     let json_data =
