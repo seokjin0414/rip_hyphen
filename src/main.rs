@@ -481,7 +481,7 @@ async fn extract_data_month(client: &Client, parent_id: &str) -> Result<KepcoDat
     let payment_method = get_text_by_locator(
         client,
         Locator::XPath(&format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_payGubnNDay')]",
+            "//*[@id='{}']//span[contains(@id, '_txt_payGubn')]",
             parent_id
         )),
     )
@@ -768,9 +768,10 @@ async fn main() -> Result<()> {
 
     // select 에서 reference_date 옵션의 인덱스 search
     let select_locator = Locator::Id("mf_wfm_layout_slb_searchYm_input_0");
-    let option_index = get_option_index(&client_arc, select_locator, &reference_date)
+    let mut option_index = get_option_index(&client_arc, select_locator, &reference_date)
         .await
         .context("Failed to find option index")?;
+    option_index+=1;
 
     // 1year over data parsing
     let mut additional_data_vec = parsing_options_data(
