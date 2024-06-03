@@ -106,7 +106,7 @@ async fn wait_for_element_hidden(
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     })
-    .await;
+        .await;
 
     if element_hidden.is_err() {
         Err(anyhow::anyhow!(
@@ -322,7 +322,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
             parent_id
         )),
     )
-    .await;
+        .await;
 
     let date_range_row = get_text_by_locator(
         client,
@@ -331,7 +331,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
             parent_id
         )),
     )
-    .await;
+        .await;
 
     let usage_row = get_text_by_locator(
         client,
@@ -340,7 +340,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
             parent_id
         )),
     )
-    .await;
+        .await;
 
     let amount_row = get_text_by_locator(
         client,
@@ -349,7 +349,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
             parent_id
         )),
     )
-    .await;
+        .await;
 
     let payment_row = get_text_by_locator_at_index(
         client,
@@ -359,7 +359,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
         )),
         1,
     )
-    .await;
+        .await;
 
     let unpaid_row = get_text_by_locator(
         client,
@@ -368,7 +368,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
             parent_id
         )),
     )
-    .await;
+        .await;
 
     let payment_option_row = get_text_by_locator(
         client,
@@ -377,7 +377,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
             parent_id
         )),
     )
-    .await;
+        .await;
 
     let claim_date = claim_date_row.map(|date| parse_date(&date)).transpose()?;
     let (start_date, end_date) = date_range_row
@@ -471,7 +471,7 @@ async fn main() -> Result<()> {
         Locator::Id("mf_wfm_header_gnb_btnSiteMap"),
         &mut chromedriver_process,
     )
-    .await?;
+        .await?;
     // menu button 클릭
     click_element(&client_arc, Locator::Id("mf_wfm_header_gnb_btnSiteMap")).await?;
 
@@ -481,7 +481,7 @@ async fn main() -> Result<()> {
         Locator::Id("mf_wfm_header_gnb_mobileGoLogin"),
         &mut chromedriver_process,
     )
-    .await?;
+        .await?;
     // login form 클릭
     click_element(&client_arc, Locator::Id("mf_wfm_header_gnb_mobileGoLogin")).await?;
 
@@ -491,27 +491,27 @@ async fn main() -> Result<()> {
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_ui_id"),
         &mut chromedriver_process,
     )
-    .await?;
+        .await?;
     // id 입력
     enter_value_in_element(
         &client_arc,
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_ui_id"),
         &user_id,
     )
-    .await?;
+        .await?;
     // pw 입력
     enter_value_in_element(
         &client_arc,
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_ui_pw"),
         &user_pw,
     )
-    .await?;
+        .await?;
     // 로그인 버튼 클릭
     click_element(
         &client_arc,
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_btn_login"),
     )
-    .await?;
+        .await?;
 
     // /html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]
     // 요금 조회 버튼 클릭 반복 시도
@@ -520,7 +520,7 @@ async fn main() -> Result<()> {
         Locator::XPath("/html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]"),
         10,
     )
-    .await?;
+        .await?;
 
     // 필드 로드 대기
     wait_for_element(
@@ -528,7 +528,7 @@ async fn main() -> Result<()> {
         Locator::Id("mf_wfm_layout_inp_searchCustNo"),
         &mut chromedriver_process,
     )
-    .await?;
+        .await?;
 
     // 1초 동안 대기(로딩...)
     //println!("Waiting for 1 SEC...");
@@ -541,7 +541,7 @@ async fn main() -> Result<()> {
         &mut chromedriver_process,
         Duration::from_secs(20),
     )
-    .await?;
+        .await?;
 
     // 사용자 번호 입력
     enter_value_in_element(
@@ -549,7 +549,7 @@ async fn main() -> Result<()> {
         Locator::Id("mf_wfm_layout_inp_searchCustNo"),
         &user_number,
     )
-    .await?;
+        .await?;
     // 사용자 번호 입력 후 검색 버튼 클릭
     click_element(&client_arc, Locator::Id("mf_wfm_layout_btn_search")).await?;
 
@@ -559,7 +559,7 @@ async fn main() -> Result<()> {
         Locator::Id("mf_wfm_layout_ui_generator_0_btn_moveDetail"),
         &mut chromedriver_process,
     )
-    .await?;
+        .await?;
     // 창에서 스크롤을 강제로 맨 아래로 내리기
     client_arc
         .execute("window.scrollTo(0, document.body.scrollHeight);", vec![])
@@ -569,7 +569,7 @@ async fn main() -> Result<()> {
         &client_arc,
         Locator::Id("mf_wfm_layout_ui_generator_0_btn_moveDetail"),
     )
-    .await?;
+        .await?;
 
     // '1년' 옵션을 선택
     click_element_with_retries(&client_arc, Locator::XPath("//option[text()='1년']"), 10).await?;
@@ -581,7 +581,7 @@ async fn main() -> Result<()> {
         &mut chromedriver_process,
         Duration::from_secs(20),
     )
-    .await?;
+        .await?;
 
     // 자식 요소들의 ID를 가져와서 DashMap에 저장
     let map = get_children_ids_to_map(&client_arc, "mf_wfm_layout_ui_generator").await?;
