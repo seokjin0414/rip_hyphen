@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use dashmap::DashMap;
 use dotenv::dotenv;
 use fantoccini::{elements::Element, Client, ClientBuilder, Locator};
@@ -207,7 +207,7 @@ async fn get_children_ids_to_map(
 
 //
 async fn parse_data_from_parent_ids(
-    client: Arc<Client>,
+    client: &Arc<Client>,
     map: Arc<DashMap<String, ()>>,
 ) -> Result<Vec<KepcoData>> {
     let mut tasks = vec![];
@@ -387,7 +387,6 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoData> {
     let usage = usage_row.map_or(Ok(0.0), |kwh| parse_use_kwh(&kwh))?;
     let amount = amount_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
     let payment = payment_row.map_or(Ok(0), |payment| parse_amount(&payment))?;
-    println!("payment : {}", payment);
     let unpaid = unpaid_row.map_or(Ok(0), |unpaid| parse_amount(&unpaid))?;
     let (payment_method, payment_date) =
         payment_option_row.map_or(Ok((None, None)), |s| parse_payment_method(&s))?;
@@ -403,6 +402,24 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoData> {
         payment_method,
         payment_date,
     })
+}
+
+// select 요소에서 옵션 인덱스 찾기
+async fn get_option_index(client: &Client, select_locator: Locator<'_>, text: &str) -> Result<usize> {
+    let element = client
+        .find(select_locator)
+        .await
+        .context("Failed to find select element")?;
+
+    let options = element.find_all(Locator::XPath(".//option")).await?;
+    for (index, option) in options.iter().enumerate() {
+        if let Ok(option_text) = option.text().await {
+            if option_text == text {
+                return Ok(index);
+            }
+        }
+    }
+    Err(anyhow::anyhow!("Option with text '{}' not found", text))
 }
 
 #[tokio::main]
@@ -573,7 +590,40 @@ async fn main() -> Result<()> {
     let map = get_children_ids_to_map(&client_arc, "mf_wfm_layout_ui_generator").await?;
 
     // data from parent_id -> vec
-    let data_vec = parse_data_from_parent_ids(client_arc, map).await?;
+    let mut data_vec = parse_data_from_parent_ids(&client_arc, map).await?;
+    data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
+
+    let reference_date = data_vec[data_vec.len() -1]
+        .claim_date
+        .map(|date| format!("{}년 {:02}월", date.year(), date.month()))
+        .unwrap_or_else(|| "날짜 없음".to_string());
+
+    // 브라우저 뒤로 가기
+    client_arc.back().await.context("Failed to navigate back")?;
+
+    // select 로드 대기
+    wait_for_element(
+        &client_arc,
+        Locator::Id("mf_wfm_layout_slb_searchYm_input_0"),
+        &mut chromedriver_process,
+    )
+        .await?;
+
+    // 로딩 대기
+    wait_for_element_hidden(
+        &client_arc,
+        Locator::Id("mf_wq_uuid_1_wq_processMsgComp"),
+        &mut chromedriver_process,
+        Duration::from_secs(20),
+    )
+        .await?;
+
+    // select 요소 에서 reference_date 와 같은 옵션의 인덱스 찾기
+    let select_locator = Locator::Id("mf_wfm_layout_slb_searchYm_input_0");
+    let option_index = get_option_index(&client_arc, select_locator, &reference_date)
+        .await
+        .context("Failed to find option index")?;
+
 
     // JSON으로 변환
     let json_data =
