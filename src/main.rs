@@ -164,6 +164,28 @@ async fn click_element_with_retries(
     }
 }
 
+// select 요소에서 옵션 인덱스 찾기
+async fn get_option_index(
+    client: &Client,
+    select_locator: Locator<'_>,
+    text: &str,
+) -> Result<usize> {
+    let element = client
+        .find(select_locator)
+        .await
+        .context("Failed to find select element")?;
+
+    let options = element.find_all(Locator::XPath(".//option")).await?;
+    for (index, option) in options.iter().enumerate() {
+        if let Ok(option_text) = option.text().await {
+            if option_text == text {
+                return Ok(index);
+            }
+        }
+    }
+    Err(anyhow::anyhow!("Option with text '{}' not found", text))
+}
+
 // 자식 요소들의 ID -> DashMap
 async fn get_children_ids_to_map(
     client: &Client,
@@ -289,7 +311,7 @@ async fn get_text_by_locator_at_index(
     }
 }
 
-// get_and_parsing_data
+// get_and_parsing_data year
 async fn extract_data_year(client: &Client, parent_id: &str) -> Result<KepcoData> {
     let claim_date_row = get_text_by_locator(
         client,
@@ -408,36 +430,92 @@ async fn parse_data_from_parent_ids(
     Ok(data_vec)
 }
 
-// select 요소에서 옵션 인덱스 찾기
-async fn get_option_index(
-    client: &Client,
-    select_locator: Locator<'_>,
-    text: &str,
-) -> Result<usize> {
-    let element = client
-        .find(select_locator)
-        .await
-        .context("Failed to find select element")?;
+// get_and_parsing_data monthly
+async fn extract_data_month(client: &Client, parent_id: &str) -> Result<KepcoData> {
+    let claim_date_row = get_text_by_locator(
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payYm')]",
+            parent_id
+        )),
+    )
+    .await;
 
-    let options = element.find_all(Locator::XPath(".//option")).await?;
-    for (index, option) in options.iter().enumerate() {
-        if let Ok(option_text) = option.text().await {
-            if option_text == text {
-                return Ok(index);
-            }
-        }
-    }
-    Err(anyhow::anyhow!("Option with text '{}' not found", text))
+    let usage_row = get_text_by_locator(
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_useKwh')]",
+            parent_id
+        )),
+    )
+    .await;
+
+    let amount_row = get_text_by_locator(
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_monthPay')]",
+            parent_id
+        )),
+    )
+    .await;
+
+    let paid_row = get_text_by_locator_at_index(
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_pay')]",
+            parent_id
+        )),
+        1,
+    )
+    .await;
+
+    let unpaid_row = get_text_by_locator(
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payAmt')]",
+            parent_id
+        )),
+    )
+    .await;
+
+    let payment_method = get_text_by_locator(
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payGubnNDay')]",
+            parent_id
+        )),
+    )
+    .await;
+
+    let claim_date = claim_date_row.map(|date| parse_date(&date)).transpose()?;
+    let usage = usage_row.map_or(Ok(0.0), |kwh| parse_use_kwh(&kwh))?;
+    let amount = amount_row.map_or(Ok(0), |amount| parse_amount(&amount))?;
+    let paid = paid_row.map_or(Ok(0), |paid| parse_amount(&paid))?;
+    let unpaid = unpaid_row.map_or(Ok(0), |unpaid| parse_amount(&unpaid))?;
+
+    Ok(KepcoData {
+        claim_date,
+        start_date: None,
+        end_date: None,
+        usage,
+        amount,
+        paid,
+        unpaid,
+        payment_method,
+        payment_date: None,
+    })
 }
 
 //
-async fn process_options(
-    client: Arc<Client>,
+async fn parsing_options_data(
+    client: &Arc<Client>,
     select_locator: Locator<'_>,
     user_number: &str,
     option_index: &usize,
     chromedriver_process: &mut Child,
-) -> Result<()> {
+) -> Result<Vec<KepcoData>> {
+    let mut kepco_data_vec: Vec<KepcoData> = Vec::new();
+
     // option 요소
     let options = client
         .find(select_locator)
@@ -483,9 +561,13 @@ async fn process_options(
             chromedriver_process,
         )
         .await?;
+
+        // data parsing
+        let data = extract_data_month(&client, "mf_wfm_layout_ui_generator").await?;
+        kepco_data_vec.push(data);
     }
 
-    Ok(())
+    Ok(kepco_data_vec)
 }
 
 #[tokio::main]
@@ -690,15 +772,18 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to find option index")?;
 
-    process_options(
-        client_arc,
+    // 1year over data parsing
+    let mut additional_data_vec = parsing_options_data(
+        &client_arc,
         select_locator,
         &user_number,
         &option_index,
         &mut chromedriver_process,
     )
-    .await
-    .context("Failed to process options")?;
+    .await?;
+
+    // data 병합
+    data_vec.append(&mut additional_data_vec);
 
     // JSON으로 변환
     let json_data =
