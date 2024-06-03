@@ -3,6 +3,8 @@ use chrono::NaiveDate;
 use dashmap::DashMap;
 use dotenv::dotenv;
 use fantoccini::{elements::Element, Client, ClientBuilder, Locator};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 use std::{
     env,
     process::{Child, Command},
@@ -10,7 +12,7 @@ use std::{
 };
 use tokio::time::{timeout, Duration};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct KepcoDate {
     claim_date: Option<NaiveDate>,
     start_date: Option<NaiveDate>,
@@ -418,8 +420,27 @@ async fn main() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // WebDriver 서버에 연결
+    // let client = loop {
+    //     match ClientBuilder::native().connect(url).await {
+    //         Ok(client) => break client,
+    //         Err(e) => {
+    //             eprintln!("Retrying to connect to WebDriver: {}", e);
+    //             tokio::time::sleep(Duration::from_secs(1)).await;
+    //         }
+    //     }
+    // };
+    let capabilities: Map<String, Value> = serde_json::from_value(json!({
+        "goog:chromeOptions": {
+            "args": ["--headless", "--disable-gpu"]
+        }
+    }))?;
+
     let client = loop {
-        match ClientBuilder::native().connect(url).await {
+        match ClientBuilder::native()
+            .capabilities(capabilities.clone())
+            .connect(url)
+            .await
+        {
             Ok(client) => break client,
             Err(e) => {
                 eprintln!("Retrying to connect to WebDriver: {}", e);
@@ -558,16 +579,18 @@ async fn main() -> Result<()> {
     // 자식 요소들의 ID를 가져와서 DashMap에 저장
     let map = get_children_ids_to_map(&client_arc, "mf_wfm_layout_ui_generator").await?;
 
-    // DashMap의 내용을 출력
-    for id in map.iter() {
-        println!("ID: {}", id.key());
-    }
-
+    // data from parent_id -> vec
     let data_vec = parse_data_from_parent_ids(client_arc, map).await?;
 
+    // JSON으로 변환
+    let json_data =
+        serde_json::to_string_pretty(&data_vec).context("Failed to serialize data to JSON")?;
+
+    println!("{}", json_data);
+
     // 2분 동안 대기
-    println!("Waiting for 2 minutes...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+    // println!("Waiting for 2 minutes...");
+    // tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
     // 브라우저 닫기
     // client.close().await.context("Failed to close the client")?;
