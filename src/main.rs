@@ -506,7 +506,7 @@ async fn extract_data_month(client: &Client, parent_id: &str) -> Result<KepcoDat
     })
 }
 
-//
+// options 들의 결과값 parsing
 async fn parsing_options_data(
     client: &Arc<Client>,
     select_locator: Locator<'_>,
