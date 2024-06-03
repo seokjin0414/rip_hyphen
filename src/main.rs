@@ -13,7 +13,7 @@ use std::{
 use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Serialize, Deserialize)]
-struct KepcoDate {
+struct KepcoData {
     claim_date: Option<NaiveDate>,
     start_date: Option<NaiveDate>,
     end_date: Option<NaiveDate>,
@@ -209,7 +209,7 @@ async fn get_children_ids_to_map(
 async fn parse_data_from_parent_ids(
     client: Arc<Client>,
     map: Arc<DashMap<String, ()>>,
-) -> Result<Vec<KepcoDate>> {
+) -> Result<Vec<KepcoData>> {
     let mut tasks = vec![];
 
     for entry in map.iter() {
@@ -314,7 +314,7 @@ async fn get_text_by_locator_at_index(client: &Client, locator: Locator<'_>, ind
 }
 
 // get_and_parsing_data
-async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
+async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoData> {
     let claim_date_row = get_text_by_locator(
         client,
         Locator::XPath(&format!(
@@ -392,7 +392,7 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
     let (payment_method, payment_date) =
         payment_option_row.map_or(Ok((None, None)), |s| parse_payment_method(&s))?;
 
-    Ok(KepcoDate {
+    Ok(KepcoData {
         claim_date,
         start_date,
         end_date,
@@ -426,16 +426,6 @@ async fn main() -> Result<()> {
     // ChromeDriver 완전 시작 대기
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // WebDriver 서버에 연결
-    // let client = loop {
-    //     match ClientBuilder::native().connect(url).await {
-    //         Ok(client) => break client,
-    //         Err(e) => {
-    //             eprintln!("Retrying to connect to WebDriver: {}", e);
-    //             tokio::time::sleep(Duration::from_secs(1)).await;
-    //         }
-    //     }
-    // };
     let capabilities: Map<String, Value> = serde_json::from_value(json!({
         "goog:chromeOptions": {
             "args": ["--headless", "--disable-gpu"]
@@ -530,10 +520,6 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // 1초 동안 대기(로딩...)
-    //println!("Waiting for 1 SEC...");
-    //tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
     // 로딩 대기
     wait_for_element_hidden(
         &client_arc,
@@ -598,9 +584,6 @@ async fn main() -> Result<()> {
     // 2분 동안 대기
     // println!("Waiting for 2 minutes...");
     // tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
-
-    // 브라우저 닫기
-    // client.close().await.context("Failed to close the client")?;
 
     // ChromeDriver 프로세스 종료
     chromedriver_process
