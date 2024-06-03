@@ -205,34 +205,6 @@ async fn get_children_ids_to_map(
     Ok(map)
 }
 
-//
-async fn parse_data_from_parent_ids(
-    client: &Arc<Client>,
-    map: Arc<DashMap<String, ()>>,
-) -> Result<Vec<KepcoData>> {
-    let mut tasks = vec![];
-
-    for entry in map.iter() {
-        let id = entry.key().clone();
-        let client = Arc::clone(&client);
-        let task = tokio::spawn(async move { extract_data(&client, &id).await });
-        tasks.push(task);
-    }
-
-    let results = futures::future::join_all(tasks).await;
-
-    let mut data_vec = Vec::new();
-    for result in results {
-        match result {
-            Ok(Ok(data)) => data_vec.push(data),
-            Ok(Err(e)) => eprintln!("Failed to extract data: {}", e),
-            Err(e) => eprintln!("Task failed: {}", e),
-        }
-    }
-
-    Ok(data_vec)
-}
-
 // parsing 청구 기간
 fn parse_date(date_str: &str) -> Result<NaiveDate> {
     let date_with_day = if date_str.len() == 7 {
@@ -314,7 +286,7 @@ async fn get_text_by_locator_at_index(client: &Client, locator: Locator<'_>, ind
 }
 
 // get_and_parsing_data
-async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoData> {
+async fn extract_data_year(client: &Client, parent_id: &str) -> Result<KepcoData> {
     let claim_date_row = get_text_by_locator(
         client,
         Locator::XPath(&format!(
@@ -404,6 +376,34 @@ async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoData> {
     })
 }
 
+// parse_data_from_parent_ids
+async fn parse_data_from_parent_ids(
+    client: &Arc<Client>,
+    map: Arc<DashMap<String, ()>>,
+) -> Result<Vec<KepcoData>> {
+    let mut tasks = vec![];
+
+    for entry in map.iter() {
+        let id = entry.key().clone();
+        let client = Arc::clone(&client);
+        let task = tokio::spawn(async move { extract_data_year(&client, &id).await });
+        tasks.push(task);
+    }
+
+    let results = futures::future::join_all(tasks).await;
+
+    let mut data_vec = Vec::new();
+    for result in results {
+        match result {
+            Ok(Ok(data)) => data_vec.push(data),
+            Ok(Err(e)) => eprintln!("Failed to extract data: {}", e),
+            Err(e) => eprintln!("Task failed: {}", e),
+        }
+    }
+
+    Ok(data_vec)
+}
+
 // select 요소에서 옵션 인덱스 찾기
 async fn get_option_index(client: &Client, select_locator: Locator<'_>, text: &str) -> Result<usize> {
     let element = client
@@ -422,6 +422,59 @@ async fn get_option_index(client: &Client, select_locator: Locator<'_>, text: &s
     Err(anyhow::anyhow!("Option with text '{}' not found", text))
 }
 
+//
+async fn process_options(
+    client: Arc<Client>,
+    select_locator: Locator<'_>,
+    user_number: &str,
+    option_index: &usize,
+    chromedriver_process: &mut Child,
+) -> Result<()> {
+    // option 요소
+    let options = client
+        .find(select_locator)
+        .await
+        .context("Failed to find select element")?
+        .find_all(Locator::Css("option"))
+        .await
+        .context("Failed to find options")?;
+
+    // option_index to last index data parsing
+    for i in *option_index..options.len() {
+        // 옵션 선택
+        options[i].click().await.context("Failed to select option")?;
+
+        // 로딩 대기
+        wait_for_element_hidden(
+            &client,
+            Locator::Id("mf_wq_uuid_1_wq_processMsgComp"),
+            chromedriver_process,
+            Duration::from_secs(20),
+        )
+            .await?;
+
+        // 고객 번호 입력
+        enter_value_in_element(&client, Locator::Id("mf_wfm_layout_inp_searchCustNo"), &user_number)
+            .await
+            .context("Failed to enter customer number")?;
+
+        // 검색 버튼 클릭
+        click_element(&client, Locator::Id("mf_wfm_layout_btn_search")).await?;
+
+        // data box 로드 대기
+        wait_for_element(
+            &client,
+            Locator::Id("mf_wfm_layout_ui_generator"),
+            chromedriver_process,
+        )
+            .await?;
+
+
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
@@ -431,18 +484,19 @@ async fn main() -> Result<()> {
     let user_pw = env::var("USER_PW").expect("");
     let user_number = env::var("USER_NUMBER").expect("");
 
-    // ChromeDriver 실행 경로 (Homebrew로 설치된 경로)
-    let chromedriver_path = "/opt/homebrew/bin/chromedriver"; // 또는 설치된 ChromeDriver의 경로
+    // driver path
+    let chromedriver_path = "/opt/homebrew/bin/chromedriver";
 
-    // ChromeDriver 실행
+    // driver 실행
     let mut chromedriver_process = Command::new(chromedriver_path)
-        .arg("--port=4444") // 포트를 4444로 설정
+        .arg("--port=4444")
         .spawn()
         .expect("failed to start ChromeDriver");
 
-    // ChromeDriver 완전 시작 대기
+    // driver 대기
     tokio::time::sleep(Duration::from_secs(2)).await;
 
+    // headless, disable-gpu option
     let capabilities: Map<String, Value> = serde_json::from_value(json!({
         "goog:chromeOptions": {
             "args": ["--headless", "--disable-gpu"]
@@ -464,7 +518,7 @@ async fn main() -> Result<()> {
     };
     let client_arc = Arc::new(client);
 
-    // 브라우저 창 크기 설정
+    // view size
     client_arc.set_window_rect(0, 0, 774, 857).await?;
     // 페이지 이동
     client_arc
@@ -520,7 +574,6 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // /html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]
     // 요금 조회 버튼 클릭 반복 시도
     click_element_with_retries(
         &client_arc,
@@ -553,7 +606,7 @@ async fn main() -> Result<()> {
         &user_number,
     )
     .await?;
-    // 사용자 번호 입력 후 검색 버튼 클릭
+    // 검색 버튼 클릭
     click_element(&client_arc, Locator::Id("mf_wfm_layout_btn_search")).await?;
 
     // 상세 요금 버튼 로드 대기
@@ -563,7 +616,7 @@ async fn main() -> Result<()> {
         &mut chromedriver_process,
     )
     .await?;
-    // 창에서 스크롤을 강제로 맨 아래로 내리기
+    // 스크롤 강제 맨 아래
     client_arc
         .execute("window.scrollTo(0, document.body.scrollHeight);", vec![])
         .await?;
@@ -586,7 +639,7 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // 자식 요소들의 ID를 가져와서 DashMap에 저장
+    // 자식 요소 ID, DashMap 에 저장
     let map = get_children_ids_to_map(&client_arc, "mf_wfm_layout_ui_generator").await?;
 
     // data from parent_id -> vec
@@ -596,9 +649,9 @@ async fn main() -> Result<()> {
     let reference_date = data_vec[data_vec.len() -1]
         .claim_date
         .map(|date| format!("{}년 {:02}월", date.year(), date.month()))
-        .unwrap_or_else(|| "날짜 없음".to_string());
+        .unwrap_or_else(|| "N/A".to_string());
 
-    // 브라우저 뒤로 가기
+    // 뒤로 가기
     client_arc.back().await.context("Failed to navigate back")?;
 
     // select 로드 대기
@@ -618,12 +671,15 @@ async fn main() -> Result<()> {
     )
         .await?;
 
-    // select 요소 에서 reference_date 와 같은 옵션의 인덱스 찾기
+    // select 에서 reference_date 옵션의 인덱스 search
     let select_locator = Locator::Id("mf_wfm_layout_slb_searchYm_input_0");
     let option_index = get_option_index(&client_arc, select_locator, &reference_date)
         .await
         .context("Failed to find option index")?;
 
+    process_options(client_arc, select_locator, &user_number, &option_index, &mut chromedriver_process)
+        .await
+        .context("Failed to process options")?;
 
     // JSON으로 변환
     let json_data =
