@@ -3,7 +3,6 @@ use chrono::NaiveDate;
 use dashmap::DashMap;
 use dotenv::dotenv;
 use fantoccini::{elements::Element, Client, ClientBuilder, Locator};
-use regex::Regex;
 use std::{
     env,
     process::{Child, Command},
@@ -204,6 +203,34 @@ async fn get_children_ids_to_map(
     Ok(map)
 }
 
+//
+async fn parse_data_from_parent_ids(
+    client: Arc<Client>,
+    map: Arc<DashMap<String, ()>>,
+) -> Result<Vec<KepcoDate>> {
+    let mut tasks = vec![];
+
+    for entry in map.iter() {
+        let id = entry.key().clone();
+        let client = Arc::clone(&client);
+        let task = tokio::spawn(async move { extract_data(&client, &id).await });
+        tasks.push(task);
+    }
+
+    let results = futures::future::join_all(tasks).await;
+
+    let mut data_vec = Vec::new();
+    for result in results {
+        match result {
+            Ok(Ok(data)) => data_vec.push(data),
+            Ok(Err(e)) => eprintln!("Failed to extract data: {}", e),
+            Err(e) => eprintln!("Task failed: {}", e),
+        }
+    }
+
+    Ok(data_vec)
+}
+
 // parsing 청구 기간
 fn parse_date(date_str: &str) -> Result<NaiveDate> {
     let date_with_day = if date_str.len() == 7 {
@@ -237,7 +264,7 @@ fn parse_use_kwh(kwh_str: &str) -> Result<f64> {
 fn parse_amount(amount_str: &str) -> Result<i64> {
     let amount_part = amount_str.split('원').next().unwrap_or(amount_str);
 
-    let amount = amount_part.replace(",", "");
+    let amount = amount_part.replace(",", "").replace(".", "");
     amount.parse::<i64>().context("Failed to parse amount")
 }
 
@@ -252,10 +279,14 @@ fn parse_payment_method(payment_str: &str) -> Result<(Option<String>, Option<Nai
     };
 
     let date = if parts.len() > 1 {
-        Some(parse_date(parts[1])?)
+        match parse_date(parts[1]) {
+            Ok(parsed_date) => Some(parsed_date),
+            Err(_) => None, // 예상하지 못한 형식일 경우 None
+        }
     } else {
         None
     };
+
     Ok((method, date))
 }
 
@@ -279,41 +310,64 @@ async fn get_text_by_locator(client: &Client, locator: Locator<'_>) -> Option<St
 async fn extract_data(client: &Client, parent_id: &str) -> Result<KepcoDate> {
     let claim_date_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_payYm')]", parent_id)),
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payYm')]",
+            parent_id
+        )),
     )
     .await;
 
     let date_range_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_gigan')]", parent_id)),
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_gigan')]",
+            parent_id
+        )),
     )
     .await;
 
     let usage_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_useKwh')]", parent_id)),
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_useKwh')]",
+            parent_id
+        )),
     )
     .await;
 
     let amount_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_monthPay')]", parent_id)),
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_monthPay')]",
+            parent_id
+        )),
     )
     .await;
 
     let payment_row = get_text_by_locator(
-        client, Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_pay')]", parent_id)),
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_pay')]",
+            parent_id
+        )),
     )
     .await;
 
     let unpaid_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_payAmt')]", parent_id)),
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payAmt')]",
+            parent_id
+        )),
     )
     .await;
 
     let payment_option_row = get_text_by_locator(
-        client, Locator::XPath(&format!("//*[@id='{}']//span[contains(@id, '_txt_payGubnNDay')]", parent_id)),
+        client,
+        Locator::XPath(&format!(
+            "//*[@id='{}']//span[contains(@id, '_txt_payGubnNDay')]",
+            parent_id
+        )),
     )
     .await;
 
@@ -373,59 +427,60 @@ async fn main() -> Result<()> {
             }
         }
     };
+    let client_arc = Arc::new(client);
 
     // 브라우저 창 크기 설정
-    client.set_window_rect(0, 0, 774, 857).await?;
+    client_arc.set_window_rect(0, 0, 774, 857).await?;
     // 페이지 이동
-    client
+    client_arc
         .goto("https://online.kepco.co.kr")
         .await
         .context("Failed to navigate")?;
 
     // menu button 로드 대기
     wait_for_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_header_gnb_btnSiteMap"),
         &mut chromedriver_process,
     )
     .await?;
     // menu button 클릭
-    click_element(&client, Locator::Id("mf_wfm_header_gnb_btnSiteMap")).await?;
+    click_element(&client_arc, Locator::Id("mf_wfm_header_gnb_btnSiteMap")).await?;
 
     // login form 로드 대기
     wait_for_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_header_gnb_mobileGoLogin"),
         &mut chromedriver_process,
     )
     .await?;
     // login form 클릭
-    click_element(&client, Locator::Id("mf_wfm_header_gnb_mobileGoLogin")).await?;
+    click_element(&client_arc, Locator::Id("mf_wfm_header_gnb_mobileGoLogin")).await?;
 
     // id 입력 로드 대기
     wait_for_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_ui_id"),
         &mut chromedriver_process,
     )
     .await?;
     // id 입력
     enter_value_in_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_ui_id"),
         &user_id,
     )
     .await?;
     // pw 입력
     enter_value_in_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_ui_pw"),
         &user_pw,
     )
     .await?;
     // 로그인 버튼 클릭
     click_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_header_gnb_login_popup_wframe_btn_login"),
     )
     .await?;
@@ -433,7 +488,7 @@ async fn main() -> Result<()> {
     // /html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]
     // 요금 조회 버튼 클릭 반복 시도
     click_element_with_retries(
-        &client,
+        &client_arc,
         Locator::XPath("/html/body/div[2]/div[3]/div/div/div[4]/div/div[2]/div[1]/a[3]"),
         10,
     )
@@ -441,7 +496,7 @@ async fn main() -> Result<()> {
 
     // 필드 로드 대기
     wait_for_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_layout_inp_searchCustNo"),
         &mut chromedriver_process,
     )
@@ -453,7 +508,7 @@ async fn main() -> Result<()> {
 
     // 로딩 대기
     wait_for_element_hidden(
-        &client,
+        &client_arc,
         Locator::Id("mf_wq_uuid_1_wq_processMsgComp"),
         &mut chromedriver_process,
         Duration::from_secs(20),
@@ -462,38 +517,38 @@ async fn main() -> Result<()> {
 
     // 사용자 번호 입력
     enter_value_in_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_layout_inp_searchCustNo"),
         &user_number,
     )
     .await?;
     // 사용자 번호 입력 후 검색 버튼 클릭
-    click_element(&client, Locator::Id("mf_wfm_layout_btn_search")).await?;
+    click_element(&client_arc, Locator::Id("mf_wfm_layout_btn_search")).await?;
 
     // 상세 요금 버튼 로드 대기
     wait_for_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_layout_ui_generator_0_btn_moveDetail"),
         &mut chromedriver_process,
     )
     .await?;
     // 창에서 스크롤을 강제로 맨 아래로 내리기
-    client
+    client_arc
         .execute("window.scrollTo(0, document.body.scrollHeight);", vec![])
         .await?;
     // 상세 요금 버튼 클릭
     click_element(
-        &client,
+        &client_arc,
         Locator::Id("mf_wfm_layout_ui_generator_0_btn_moveDetail"),
     )
     .await?;
 
     // '1년' 옵션을 선택
-    click_element_with_retries(&client, Locator::XPath("//option[text()='1년']"), 10).await?;
+    click_element_with_retries(&client_arc, Locator::XPath("//option[text()='1년']"), 10).await?;
 
     // 로딩 대기
     wait_for_element_hidden(
-        &client,
+        &client_arc,
         Locator::Id("mf_wq_uuid_1_wq_processMsgComp"),
         &mut chromedriver_process,
         Duration::from_secs(20),
@@ -501,19 +556,22 @@ async fn main() -> Result<()> {
     .await?;
 
     // 자식 요소들의 ID를 가져와서 DashMap에 저장
-    let map = get_children_ids_to_map(&client, "mf_wfm_layout_ui_generator").await?;
+    let map = get_children_ids_to_map(&client_arc, "mf_wfm_layout_ui_generator").await?;
 
     // DashMap의 내용을 출력
     for id in map.iter() {
         println!("ID: {}", id.key());
     }
 
+    let data_vec = parse_data_from_parent_ids(client_arc, map).await?;
+
     // 2분 동안 대기
     println!("Waiting for 2 minutes...");
     tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
     // 브라우저 닫기
-    client.close().await.context("Failed to close the client")?;
+    // client.close().await.context("Failed to close the client")?;
+
     // ChromeDriver 프로세스 종료
     chromedriver_process
         .kill()
