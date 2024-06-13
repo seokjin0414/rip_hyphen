@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{Datelike, NaiveDate};
 use dashmap::DashMap;
 use dotenv::dotenv;
@@ -10,6 +10,7 @@ use std::{
     process::{Child, Command},
     sync::Arc,
 };
+use futures::TryFutureExt;
 use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -117,16 +118,24 @@ async fn main() -> Result<()> {
         Locator::XPath("/html/body/div[1]/div[2]/div[1]/ul[4]/li[5]/a"),
     )
         .await?;
-    
-    
+
     // 뒤로 가기
     client_arc.goto("").await.context("Failed to navigate back")?;
 
+    // 로딩 대기
+    wait_for_element_display_none(
+        &client_arc,
+        Locator::Id("backgroundLayer"),
+        &mut chromedriver_process,
+        Duration::from_secs(10),
+    )
+        .await?;
+
     // '1년' 옵션을 선택
-    click_element_with_retries(&client_arc, Locator::XPath("//option[text()='1년']"), 10).await?;
+    //click_element_with_retries(&client_arc, Locator::XPath("//option[text()='1년']"), 10).await?;
 
     // 자식 요소 ID, DashMap 에 저장
-    let map = get_children_ids_to_map(&client_arc, "mf_wfm_layout_ui_generator").await?;
+    let map = get_children_ids_to_map(&client_arc, "/html/body/div[2]/div[3]/div[5]/div[3]/div[3]/div/table/tbody").await?;
 
     // data from parent_id -> vec
     let mut data_vec = parse_data_from_parent_ids(&client_arc, map).await?;
@@ -141,14 +150,14 @@ async fn main() -> Result<()> {
     // select 로드 대기
     wait_for_element(
         &client_arc,
-        Locator::Id("mf_wfm_layout_slb_searchYm_input_0"),
+        Locator::Id("year"),
         &mut chromedriver_process,
     )
         .await?;
-    
+
 
     // select 에서 reference_date 옵션의 인덱스 search
-    let select_locator = Locator::Id("mf_wfm_layout_slb_searchYm_input_0");
+    let select_locator = Locator::Id("year");
     let mut option_index = get_option_index(&client_arc, select_locator, &reference_date)
         .await
         .context("Failed to find option index")?;
@@ -158,7 +167,6 @@ async fn main() -> Result<()> {
     let mut additional_data_vec = parsing_options_data(
         &client_arc,
         select_locator,
-        &user_number,
         &option_index,
         &mut chromedriver_process,
     )
@@ -174,8 +182,8 @@ async fn main() -> Result<()> {
     println!("{}", json_data);
 
     // 2분 동안 대기
-    // println!("Waiting for 2 minutes...");
-    // tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+    println!("Waiting for 2 minutes...");
+    tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
     // ChromeDriver 프로세스 종료
     chromedriver_process
@@ -221,6 +229,53 @@ async fn click_element(client: &Client, locator: Locator<'_>) -> Result<()> {
         return Err(anyhow::anyhow!("Failed to find the element: {:?}", locator));
     }
     Ok(())
+}
+
+// 요소 클릭 반복
+async fn click_element_with_retries(
+    client: &Client,
+    locator: Locator<'_>,
+    max_attempts: u32,
+) -> std::result::Result<(), anyhow> {
+    let mut attempts = 0;
+    loop {
+        if attempts >= max_attempts {
+            return Err(anyhow::anyhow!(
+                "Failed to click the element after {} attempts",
+                max_attempts
+            ));
+        }
+        match client.find(locator).await {
+            Ok(element) => match element.click().await {
+                Ok(_) => {
+                    println!(
+                        "Element clicked successfully after {} attempts",
+                        attempts + 1
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Failed to click the element (attempt {}): {}",
+                        attempts + 1,
+                        e
+                    );
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    attempts += 1;
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "Retrying to find the element (attempt {}): {}",
+                    attempts + 1,
+                    e
+                );
+                // 요소를 찾지 못하면 잠시 대기 후 다시 시도
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                attempts += 1;
+            }
+        }
+    }
 }
 
 // 요소에 값 입력
@@ -277,7 +332,6 @@ async fn wait_for_element_display_none (
     }
 }
 
-
 // select 요소에서 옵션 인덱스 찾기
 async fn get_option_index(
     client: &Client,
@@ -303,18 +357,22 @@ async fn get_option_index(
 // 자식 요소들의 ID -> DashMap
 async fn get_children_ids_to_map(
     client: &Client,
-    parent_id: &str,
+    parent_xpath: &str,
 ) -> Result<Arc<DashMap<String, ()>>> {
     let script = format!(
         r#"
-        let children = document.getElementById('{}').children;
+        let parent = document.evaluate('{}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        if (parent === null) {{
+            throw new Error("Parent element not found");
+        }}
+        let children = parent.children;
         let ids = [];
         for (let i = 0; i < children.length; i++) {{
             ids.push(children[i].id);
         }}
         return ids;
         "#,
-        parent_id
+        parent_xpath
     );
 
     let result = client
