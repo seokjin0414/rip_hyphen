@@ -27,6 +27,7 @@ async fn main() -> Result<()> {
     let url = "http://localhost:4444";
     let user_id = env::var("PP_ID").expect("");
     let user_pw = env::var("PP_PW").expect("");
+    let user_num = env::var("PP_NUMBER").expect("");
 
     // driver path
     let chromedriver_path = "/opt/homebrew/bin/chromedriver";
@@ -131,15 +132,12 @@ async fn main() -> Result<()> {
     )
         .await?;
 
+    // data from parent_id -> vec
+    let mut data_vec = parse_data_from_table(&client_arc, "//*[@id='grid']/tbody").await?;
+    data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
+
     // '1년' 옵션을 선택
     //click_element_with_retries(&client_arc, Locator::XPath("//option[text()='1년']"), 10).await?;
-
-    // 자식 요소 ID, DashMap 에 저장
-    let map = get_children_ids_to_map(&client_arc, "/html/body/div[2]/div[3]/div[5]/div[3]/div[3]/div/table/tbody").await?;
-
-    // data from parent_id -> vec
-    let mut data_vec = parse_data_from_parent_ids(&client_arc, map).await?;
-    data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
 
     let reference_date = data_vec[data_vec.len() - 1]
         .claim_date
@@ -426,13 +424,9 @@ async fn get_text_by_locator_at_index(
 
 // parsing 청구 기간
 fn parse_date(date_str: &str) -> Result<NaiveDate> {
-    let date_with_day = if date_str.len() == 7 {
-        format!("{}.01", date_str) // 일자를 1로 설정
-    } else {
-        date_str.to_string()
-    };
-
-    NaiveDate::parse_from_str(&date_with_day, "%Y.%m.%d").context("Failed to parse date")
+    // 일자를 1로 설정
+    let date_with_day = format!("{}.01일", date_str);
+    NaiveDate::parse_from_str(&date_with_day, "%Y년 %m월 %d일").context("Failed to parse date")
 }
 
 // parsing 사용량
@@ -456,7 +450,7 @@ async fn extract_data_year(client: &Client, parent_id: &str) -> Result<PpData> {
     let claim_date_row = get_text_by_locator(
         client,
         Locator::XPath(&format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_payYm')]",
+            "//*[@id='{}']/td[1]/a/span",
             parent_id
         )),
     )
@@ -465,19 +459,18 @@ async fn extract_data_year(client: &Client, parent_id: &str) -> Result<PpData> {
     let usage_row = get_text_by_locator(
         client,
         Locator::XPath(&format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_useKwh')]",
+            "//*[@id='{}']/td[4]",
             parent_id
         )),
     )
     .await;
 
-    let paid_row = get_text_by_locator_at_index(
+    let paid_row = get_text_by_locator(
         client,
         Locator::XPath(&format!(
-            "//*[@id='{}']//span[contains(@id, '_txt_pay')]",
+            "//*[@id='{}']/td[8]",
             parent_id
         )),
-        1,
     )
     .await;
 
@@ -494,11 +487,13 @@ async fn extract_data_year(client: &Client, parent_id: &str) -> Result<PpData> {
 }
 
 // parse_data_from_parent_ids
-async fn parse_data_from_parent_ids(
+async fn parse_data_from_table(
     client: &Arc<Client>,
-    map: Arc<DashMap<String, ()>>,
+    parent_xpath: &str,
 ) -> Result<Vec<PpData>> {
     let mut tasks = vec![];
+
+    let map = get_children_ids_to_map(&client, parent_xpath).await?;
 
     for entry in map.iter() {
         let id = entry.key().clone();
@@ -528,8 +523,6 @@ async fn parsing_options_data(
     option_index: &usize,
     chromedriver_process: &mut Child,
 ) -> Result<Vec<PpData>> {
-    let mut vec: Vec<PpData> = Vec::new();
-
     // option 요소
     let options = client
         .find(select_locator)
@@ -539,6 +532,8 @@ async fn parsing_options_data(
         .await
         .context("Failed to find options")?;
 
+    let mut vec: Vec<PpData> = Vec::with_capacity(options.len() * 12);
+
     // option_index to last index data parsing
     for i in *option_index..options.len() {
         // 옵션 선택
@@ -547,29 +542,22 @@ async fn parsing_options_data(
             .await
             .context("Failed to select option")?;
 
+        // 조회 버튼 클릭
+        // /html/body/div[2]/div[3]/div[2]/p/span[1]/a
+        click_element(&client, Locator::XPath("//*[@id='txt']/div[2]/p/span[1]/a")).await?;
+
         // 로딩 대기
         wait_for_element_display_none(
             &client,
-            Locator::Id("mf_wq_uuid_1_wq_processMsgComp"),
+            Locator::Id("backgroundLayer"),
             chromedriver_process,
-            Duration::from_secs(20),
+            Duration::from_secs(10),
         )
-        .await?;
-
-        // 조회 버튼 클릭
-        click_element(&client, Locator::XPath("/html/body/div[2]/div[3]/div[2]/p/span[1]/a")).await?;
-
-        // data box 로드 대기
-        wait_for_element(
-            &client,
-            Locator::Id("mf_wfm_layout_ui_generator"),
-            chromedriver_process,
-        )
-        .await?;
+            .await?;
 
         // data parsing
-        let data = extract_data_month(&client, "mf_wfm_layout_ui_generator").await?;
-        vec.push(data);
+        let mut data = parse_data_from_table(&client, "//*[@id='grid']/tbody").await?;
+        vec.append(& mut data);
     }
 
     Ok(vec)
