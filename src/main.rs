@@ -10,6 +10,7 @@ use std::{
     process::{Child, Command},
     sync::Arc,
 };
+use std::future::Future;
 use futures::TryFutureExt;
 use tokio::time::{timeout, Duration};
 
@@ -21,10 +22,11 @@ struct PpData {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), anyhow::Error> {
     dotenv().ok();
 
     let url = "http://localhost:4444";
+    let target_url = "https://pp.kepco.co.kr";
     let user_id = env::var("PP_ID").expect("");
     let user_pw = env::var("PP_PW").expect("");
     let user_num = env::var("PP_NUMBER").expect("");
@@ -42,16 +44,14 @@ async fn main() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // headless, disable-gpu option
-    // "--headless", "--disable-gpu"
     let capabilities: Map<String, Value> = serde_json::from_value(json!({
         "goog:chromeOptions": {
-            "args": []
+            "args": ["--headless", "--disable-gpu"]
         }
     }))?;
-
+// .capabilities(capabilities.clone())
     let client = loop {
         match ClientBuilder::native()
-            .capabilities(capabilities.clone())
             .connect(url)
             .await
         {
@@ -68,12 +68,24 @@ async fn main() -> Result<()> {
     client_arc.set_window_rect(0, 0, 774, 857).await?;
     // 페이지 이동
     client_arc
-        .goto("https://pp.kepco.co.kr/intro.do")
+        .goto(&format!("{}/intro.do", target_url))
         .await
         .context("Failed to navigate")?;
 
+    // 공지 팝업 로드 대기
+    wait_for_element(
+        &client_arc,
+        Locator::Id("notice_auto_popup"),
+        &mut chromedriver_process,
+    )
+        .await?;
+
     //공지 팝업 비활성화
-    //notice_auto_popup
+    click_element(
+        &client_arc,
+        Locator::XPath("/html/body/div[2]/div[3]/label"),
+    )
+        .await?;
 
     // id 입력 로드 대기
     wait_for_element(
@@ -111,17 +123,20 @@ async fn main() -> Result<()> {
         Duration::from_secs(10),
     )
         .await?;
-    
-    // 월별 청구 요금 버튼 클릭
-    // 해당 href 값으로 이동
+
+    // user_num selector 클릭
     click_element(
         &client_arc,
-        Locator::XPath("/html/body/div[1]/div[2]/div[1]/ul[4]/li[5]/a"),
+        Locator::XPath("/html/body/div[1]/div[1]/div/div/a[2]"),
     )
         .await?;
 
-    // 뒤로 가기
-    client_arc.goto("").await.context("Failed to navigate back")?;
+    // user_num 클릭
+    click_element(
+        &client_arc,
+        Locator::XPath(format!("/html/body/div[1]/div[1]/div/div/ul/li[1]/a[text()='{}']", user_num).as_str()),
+    )
+        .await?;
 
     // 로딩 대기
     wait_for_element_display_none(
@@ -132,40 +147,39 @@ async fn main() -> Result<()> {
     )
         .await?;
 
-    // data from parent_id -> vec
-    let mut data_vec = parse_data_from_table(&client_arc, "//*[@id='grid']/tbody").await?;
-    data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
-
-    // '1년' 옵션을 선택
-    //click_element_with_retries(&client_arc, Locator::XPath("//option[text()='1년']"), 10).await?;
-
-    let reference_date = data_vec[data_vec.len() - 1]
-        .claim_date
-        .map(|date| format!("{}년 {:02}월", date.year(), date.month()))
-        .unwrap_or_else(|| "N/A".to_string());
-
-
-    // select 로드 대기
-    wait_for_element(
+    // get 월별 청구 요금 url
+    let monthly_claim_href = get_href_by_locator(
         &client_arc,
-        Locator::Id("year"),
+        Locator::XPath("/html/body/div[1]/div[2]/div[1]/ul[4]/li[5]/a"),
+    )
+        .await.ok_or("");
+
+    let claim_url = format!("{}{}", target_url, monthly_claim_href.unwrap());
+
+    // 월별 청구 요금 이동
+    client_arc.goto(&claim_url).await.context("Failed go to monthly_claim_href")?;
+
+    // 로딩 대기
+    wait_for_element_display_none(
+        &client_arc,
+        Locator::Id("backgroundLayer"),
         &mut chromedriver_process,
+        Duration::from_secs(10),
     )
         .await?;
 
+    // data from table -> vec
+    let mut data_vec = parse_data_from_table(&client_arc, "//*[@id='grid']/tbody").await?;
+    //data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
 
     // select 에서 reference_date 옵션의 인덱스 search
     let select_locator = Locator::Id("year");
-    let mut option_index = get_option_index(&client_arc, select_locator, &reference_date)
-        .await
-        .context("Failed to find option index")?;
-    option_index+=1;
 
     // 1year over data parsing
     let mut additional_data_vec = parsing_options_data(
         &client_arc,
         select_locator,
-        &option_index,
+        &1,
         &mut chromedriver_process,
     )
         .await?;
@@ -227,53 +241,6 @@ async fn click_element(client: &Client, locator: Locator<'_>) -> Result<()> {
         return Err(anyhow::anyhow!("Failed to find the element: {:?}", locator));
     }
     Ok(())
-}
-
-// 요소 클릭 반복
-async fn click_element_with_retries(
-    client: &Client,
-    locator: Locator<'_>,
-    max_attempts: u32,
-) -> std::result::Result<(), anyhow> {
-    let mut attempts = 0;
-    loop {
-        if attempts >= max_attempts {
-            return Err(anyhow::anyhow!(
-                "Failed to click the element after {} attempts",
-                max_attempts
-            ));
-        }
-        match client.find(locator).await {
-            Ok(element) => match element.click().await {
-                Ok(_) => {
-                    println!(
-                        "Element clicked successfully after {} attempts",
-                        attempts + 1
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Failed to click the element (attempt {}): {}",
-                        attempts + 1,
-                        e
-                    );
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    attempts += 1;
-                }
-            },
-            Err(e) => {
-                eprintln!(
-                    "Retrying to find the element (attempt {}): {}",
-                    attempts + 1,
-                    e
-                );
-                // 요소를 찾지 못하면 잠시 대기 후 다시 시도
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                attempts += 1;
-            }
-        }
-    }
 }
 
 // 요소에 값 입력
@@ -405,19 +372,10 @@ async fn get_text_by_locator(client: &Client, locator: Locator<'_>) -> Option<St
     }
 }
 
-// get text from locator art index
-async fn get_text_by_locator_at_index(
-    client: &Client,
-    locator: Locator<'_>,
-    index: usize,
-) -> Option<String> {
-    match client.find_all(locator).await.ok() {
-        Some(elements) => {
-            if let Some(element) = elements.get(index) {
-                return element.text().await.ok();
-            }
-            None
-        }
+// get href from locator
+async fn get_href_by_locator(client: &Client, locator: Locator<'_>) -> Option<String> {
+    match client.find(locator).await.ok() {
+        Some(element) => element.attr("href").await.ok().flatten(),
         None => None,
     }
 }
