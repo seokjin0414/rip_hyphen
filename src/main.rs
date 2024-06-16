@@ -170,7 +170,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // data from table -> vec
     let mut data_vec = parse_data_from_table(&client_arc, "//*[@id='grid']/tbody").await?;
 
-    // select 에서 reference_date 옵션의 인덱스 search
+    // select locator
     let select_locator = Locator::Id("year");
 
     // 1year over data parsing
