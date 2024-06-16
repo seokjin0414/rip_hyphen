@@ -52,7 +52,11 @@ async fn main() -> Result<(), anyhow::Error> {
     }))?;
     // .capabilities(capabilities.clone())
     let client = loop {
-        match ClientBuilder::native().connect(url).await {
+        match ClientBuilder::native()
+            .capabilities(capabilities.clone())
+            .connect(url)
+            .await
+        {
             Ok(client) => break client,
             Err(e) => {
                 eprintln!("Retrying to connect to WebDriver: {}", e);
