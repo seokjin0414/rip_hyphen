@@ -3,15 +3,15 @@ use chrono::{Datelike, NaiveDate};
 use dashmap::DashMap;
 use dotenv::dotenv;
 use fantoccini::{elements::Element, Client, ClientBuilder, Locator};
+use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::future::Future;
 use std::{
     env,
     process::{Child, Command},
     sync::Arc,
 };
-use std::future::Future;
-use futures::TryFutureExt;
 use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -49,12 +49,9 @@ async fn main() -> Result<(), anyhow::Error> {
             "args": ["--headless", "--disable-gpu"]
         }
     }))?;
-// .capabilities(capabilities.clone())
+    // .capabilities(capabilities.clone())
     let client = loop {
-        match ClientBuilder::native()
-            .connect(url)
-            .await
-        {
+        match ClientBuilder::native().connect(url).await {
             Ok(client) => break client,
             Err(e) => {
                 eprintln!("Retrying to connect to WebDriver: {}", e);
@@ -78,14 +75,14 @@ async fn main() -> Result<(), anyhow::Error> {
         Locator::Id("notice_auto_popup"),
         &mut chromedriver_process,
     )
-        .await?;
+    .await?;
 
     //공지 팝업 비활성화
     click_element(
         &client_arc,
         Locator::XPath("/html/body/div[2]/div[3]/label"),
     )
-        .await?;
+    .await?;
 
     // id 입력 로드 대기
     wait_for_element(
@@ -93,27 +90,17 @@ async fn main() -> Result<(), anyhow::Error> {
         Locator::Id("RSA_USER_ID"),
         &mut chromedriver_process,
     )
-        .await?;
+    .await?;
     // id 입력
-    enter_value_in_element(
-        &client_arc,
-        Locator::Id("RSA_USER_ID"),
-        &user_id,
-    )
-        .await?;
+    enter_value_in_element(&client_arc, Locator::Id("RSA_USER_ID"), &user_id).await?;
     // pw 입력
-    enter_value_in_element(
-        &client_arc,
-        Locator::Id("RSA_USER_PWD"),
-        &user_pw,
-    )
-        .await?;
+    enter_value_in_element(&client_arc, Locator::Id("RSA_USER_PWD"), &user_pw).await?;
     // 로그인 버튼 클릭
     click_element(
         &client_arc,
         Locator::XPath("/html/body/div[1]/div[2]/div[1]/form/fieldset/input[1]"),
     )
-        .await?;
+    .await?;
 
     // 로딩 대기
     wait_for_element_display_none(
@@ -122,21 +109,27 @@ async fn main() -> Result<(), anyhow::Error> {
         &mut chromedriver_process,
         Duration::from_secs(10),
     )
-        .await?;
+    .await?;
 
     // user_num selector 클릭
     click_element(
         &client_arc,
         Locator::XPath("/html/body/div[1]/div[1]/div/div/a[2]"),
     )
-        .await?;
+    .await?;
 
     // user_num 클릭
     click_element(
         &client_arc,
-        Locator::XPath(format!("/html/body/div[1]/div[1]/div/div/ul/li[1]/a[text()='{}']", user_num).as_str()),
+        Locator::XPath(
+            format!(
+                "/html/body/div[1]/div[1]/div/div/ul/li[1]/a[text()='{}']",
+                user_num
+            )
+            .as_str(),
+        ),
     )
-        .await?;
+    .await?;
 
     // 로딩 대기
     wait_for_element_display_none(
@@ -145,19 +138,23 @@ async fn main() -> Result<(), anyhow::Error> {
         &mut chromedriver_process,
         Duration::from_secs(10),
     )
-        .await?;
+    .await?;
 
     // get 월별 청구 요금 url
     let monthly_claim_href = get_href_by_locator(
         &client_arc,
         Locator::XPath("/html/body/div[1]/div[2]/div[1]/ul[4]/li[5]/a"),
     )
-        .await.ok_or("");
+    .await
+    .ok_or("");
 
     let claim_url = format!("{}{}", target_url, monthly_claim_href.unwrap());
 
     // 월별 청구 요금 이동
-    client_arc.goto(&claim_url).await.context("Failed go to monthly_claim_href")?;
+    client_arc
+        .goto(&claim_url)
+        .await
+        .context("Failed go to monthly_claim_href")?;
 
     // 로딩 대기
     wait_for_element_display_none(
@@ -166,7 +163,7 @@ async fn main() -> Result<(), anyhow::Error> {
         &mut chromedriver_process,
         Duration::from_secs(10),
     )
-        .await?;
+    .await?;
 
     // data from table -> vec
     let mut data_vec = parse_data_from_table(&client_arc, "//*[@id='grid']/tbody").await?;
@@ -176,13 +173,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let select_locator = Locator::Id("year");
 
     // 1year over data parsing
-    let mut additional_data_vec = parsing_options_data(
-        &client_arc,
-        select_locator,
-        &1,
-        &mut chromedriver_process,
-    )
-        .await?;
+    let mut additional_data_vec =
+        parsing_options_data(&client_arc, select_locator, &1, &mut chromedriver_process).await?;
 
     // data 병합
     data_vec.append(&mut additional_data_vec);
@@ -258,7 +250,7 @@ async fn enter_value_in_element(client: &Client, locator: Locator<'_>, text: &st
 }
 
 // 요소 비활성화 대기
-async fn wait_for_element_display_none (
+async fn wait_for_element_display_none(
     client: &Client,
     locator: Locator<'_>,
     chromedriver_process: &mut Child,
@@ -286,7 +278,7 @@ async fn wait_for_element_display_none (
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     })
-        .await;
+    .await;
 
     if element_hidden.is_err() {
         Err(anyhow::anyhow!(
@@ -326,11 +318,11 @@ async fn get_children_ids_to_map(
 ) -> Result<Arc<DashMap<String, ()>>> {
     let script = format!(
         r#"
-        let parent = document.evaluate('{}', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        let parent = document.evaluate("{}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
         if (parent === null) {{
-            throw new Error("Parent element not found");
+            throw new Error('Parent element not found');
         }}
-        let children = parent.children;
+        let children = parent.querySelectorAll('tr');
         let ids = [];
         for (let i = 0; i < children.length; i++) {{
             ids.push(children[i].id);
@@ -407,35 +399,25 @@ fn parse_paid(amount_str: &str) -> Result<i64> {
 async fn extract_data_year(client: &Client, parent_id: &str) -> Result<PpData> {
     let claim_date_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!(
-            "//*[@id='{}']/td[1]/a/span",
-            parent_id
-        )),
+        Locator::XPath(&format!("//*[@id='{}']/td[1]/a/span", parent_id)),
     )
     .await;
 
     let usage_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!(
-            "//*[@id='{}']/td[4]",
-            parent_id
-        )),
+        Locator::XPath(&format!("//*[@id='{}']/td[4]", parent_id)),
     )
     .await;
 
     let paid_row = get_text_by_locator(
         client,
-        Locator::XPath(&format!(
-            "//*[@id='{}']/td[8]",
-            parent_id
-        )),
+        Locator::XPath(&format!("//*[@id='{}']/td[8]", parent_id)),
     )
     .await;
 
     let claim_date = claim_date_row.map_or(Ok(Default::default()), |date| parse_date(&date))?;
     let usage = usage_row.map_or(Ok(0.0), |kwh| parse_use_kwh(&kwh))?;
     let paid = paid_row.map_or(Ok(0), |paid| parse_paid(&paid))?;
-
 
     Ok(PpData {
         claim_date,
@@ -445,10 +427,7 @@ async fn extract_data_year(client: &Client, parent_id: &str) -> Result<PpData> {
 }
 
 // parse_data_from_parent_ids
-async fn parse_data_from_table(
-    client: &Arc<Client>,
-    parent_xpath: &str,
-) -> Result<Vec<PpData>> {
+async fn parse_data_from_table(client: &Arc<Client>, parent_xpath: &str) -> Result<Vec<PpData>> {
     let mut tasks = vec![];
 
     let map = get_children_ids_to_map(&client, parent_xpath).await?;
@@ -511,11 +490,11 @@ async fn parsing_options_data(
             chromedriver_process,
             Duration::from_secs(10),
         )
-            .await?;
+        .await?;
 
         // data parsing
         let mut data = parse_data_from_table(&client, "//*[@id='grid']/tbody").await?;
-        vec.append(& mut data);
+        vec.append(&mut data);
     }
 
     Ok(vec)
