@@ -6,6 +6,7 @@ use fantoccini::{elements::Element, Client, ClientBuilder, Locator};
 use futures::TryFutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+use std::collections::HashSet;
 use std::future::Future;
 use std::{
     env,
@@ -76,7 +77,6 @@ async fn main() -> Result<(), anyhow::Error> {
         &mut chromedriver_process,
     )
     .await?;
-
     //공지 팝업 비활성화
     click_element(
         &client_arc,
@@ -117,7 +117,6 @@ async fn main() -> Result<(), anyhow::Error> {
         Locator::XPath("/html/body/div[1]/div[1]/div/div/a[2]"),
     )
     .await?;
-
     // user_num 클릭
     click_element(
         &client_arc,
@@ -149,7 +148,6 @@ async fn main() -> Result<(), anyhow::Error> {
     .ok_or("");
 
     let claim_url = format!("{}{}", target_url, monthly_claim_href.unwrap());
-
     // 월별 청구 요금 이동
     client_arc
         .goto(&claim_url)
@@ -167,7 +165,6 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // data from table -> vec
     let mut data_vec = parse_data_from_table(&client_arc, "//*[@id='grid']/tbody").await?;
-    //data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
 
     // select 에서 reference_date 옵션의 인덱스 search
     let select_locator = Locator::Id("year");
@@ -179,6 +176,13 @@ async fn main() -> Result<(), anyhow::Error> {
     // data 병합
     data_vec.append(&mut additional_data_vec);
 
+    // 중복 제거
+    let mut unique_dates = HashSet::new();
+    data_vec.retain(|entry| unique_dates.insert(entry.claim_date));
+
+    // 정렬
+    data_vec.sort_by(|a, b| b.claim_date.cmp(&a.claim_date));
+
     // JSON으로 변환
     let json_data =
         serde_json::to_string_pretty(&data_vec).context("Failed to serialize data to JSON")?;
@@ -186,8 +190,8 @@ async fn main() -> Result<(), anyhow::Error> {
     println!("{}", json_data);
 
     // 2분 동안 대기
-    println!("Waiting for 2 minutes...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+    // println!("Waiting for 2 minutes...");
+    // tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
     // ChromeDriver 프로세스 종료
     chromedriver_process
@@ -341,12 +345,10 @@ async fn get_children_ids_to_map(
         .as_array()
         .context("Expected an array from the script result")?
         .iter()
-        .map(|v| {
-            v.as_str()
-                .context("Expected a string in the array")
-                .map(|s| s.to_string())
-        })
-        .collect::<Result<Vec<String>>>()?;
+        .filter_map(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect::<Vec<String>>();
 
     let map = Arc::new(DashMap::new());
     for id in ids {
@@ -375,7 +377,7 @@ async fn get_href_by_locator(client: &Client, locator: Locator<'_>) -> Option<St
 // parsing 청구 기간
 fn parse_date(date_str: &str) -> Result<NaiveDate> {
     // 일자를 1로 설정
-    let date_with_day = format!("{}.01일", date_str);
+    let date_with_day = format!("{} 01일", date_str);
     NaiveDate::parse_from_str(&date_with_day, "%Y년 %m월 %d일").context("Failed to parse date")
 }
 
